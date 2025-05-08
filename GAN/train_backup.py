@@ -1,0 +1,153 @@
+import torch
+from Models.generator import Generator
+from Models.discriminator import Discriminator
+from Utils.dataloader import EmotionDataset
+from Utils.losses import AFMLoss, WGAN_GPLoss
+from torch.utils.data import DataLoader
+import torch.optim as optim
+import torchvision.transforms as transforms
+import torch.nn.functional as F
+
+
+def train(
+    img_dir,
+    label_csv,
+    epochs=50,
+    batch_size=32,
+    lr=0.0001,
+    lambda_gp=10,
+    device=None,
+):
+    # Initialize device
+    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Initialize models
+    G = Generator().to(device)
+    D = Discriminator().to(device)
+
+    # Optimizers
+    opt_G = optim.Adam(G.parameters(), lr=lr, betas=(0.5, 0.999))
+    opt_D = optim.Adam(D.parameters(), lr=lr, betas=(0.5, 0.999))
+
+    # Loss functions
+    afm_loss = AFMLoss()
+    wgan_gp = WGAN_GPLoss(lambda_gp=lambda_gp)
+
+    # Data loading
+    transform = transforms.Compose(
+        [
+            transforms.Resize((128, 128)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        ]
+    )
+    dataset = EmotionDataset(img_dir, label_csv, transform)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    # Training loop
+    for epoch in range(epochs):
+        for i, (real_imgs, v, a) in enumerate(dataloader):
+            real_imgs, v, a = real_imgs.to(device), v.to(device), a.to(device)
+            z = torch.randn(real_imgs.size(0), 100).to(device)
+
+            # Determine current stage for progressive growing
+            stage = min(epoch // 20, 5)
+
+            # Downsample real images to match the current stage resolution
+            resolution = 4 * (2**stage)  # Calculate resolution based on stage
+            real_imgs = F.interpolate(
+                real_imgs,
+                size=(resolution, resolution),
+                mode="bilinear",
+                align_corners=False,
+            )
+
+            # --- Train Discriminator ---
+            D.train()
+            G.eval()
+
+            # 生成假图像（不保留生成器梯度）
+            with torch.no_grad():
+                fake_imgs = G(z, v, a, stage=stage)
+
+            # 获取特征并分离计算图
+            D_real, real_features = D(real_imgs, v, a, stage=stage)
+            D_fake, fake_features = D(fake_imgs.detach(), v, a, stage=stage)
+
+            # 分离特征张量
+            real_features = [
+                (rf.detach(), v.detach(), a.detach()) for (rf, v, a) in real_features
+            ]
+            fake_features = [
+                (ff.detach(), v.detach(), a.detach()) for (ff, v, a) in fake_features
+            ]
+
+            # 计算判别器损失
+            loss_adv = -torch.mean(D_real) + torch.mean(D_fake)
+            loss_gp = wgan_gp(D, real_imgs, fake_imgs, v, a)
+            loss_v, loss_a = afm_loss(real_features, fake_features)
+            loss_D = loss_adv + loss_gp + 100 * (loss_v + loss_a)
+
+            # 更新判别器
+            opt_D.zero_grad()
+            loss_D.backward()
+            opt_D.step()
+
+            # --- Train Generator ---
+            D.eval()
+            G.train()
+
+            # 重新生成假图像并获取特征
+            fake_imgs = G(z, v, a, stage=stage)
+            D_fake, fake_features = D(fake_imgs, v, a, stage=stage)
+
+            # 重新获取真实图像的特征（不保留判别器梯度）
+            with torch.no_grad():
+                _, real_features = D(real_imgs, v, a, stage=stage)
+
+            # 计算生成器损失
+            loss_adv = -torch.mean(D_fake)
+            loss_v, loss_a = afm_loss(real_features, fake_features)
+            loss_G = loss_adv + 100 * (loss_v + loss_a)
+
+            # 更新生成器
+            opt_G.zero_grad()
+            loss_G.backward()
+            opt_G.step()
+
+            # Logging
+            if i % 50 == 0:
+                print(
+                    f"Epoch {epoch}, Batch {i}: D_loss={loss_D.item():.3f}, G_loss={loss_G.item():.3f}"
+                )
+
+            if (epoch + 1) % 10 == 0:
+                torch.save(
+                    G.state_dict(),
+                    rf"C:\Users\cxoox\Desktop\AIST3110_Project\GAN\Weights\generator_epoch_{epoch+1}.pth",
+                )
+                torch.save(
+                    D.state_dict(),
+                    rf"C:\Users\cxoox\Desktop\AIST3110_Project\GAN\Weights\discriminator_epoch_{epoch+1}.pth",
+                )
+
+        # Save final models
+        torch.save(
+            G.state_dict(),
+            r"C:\Users\cxoox\Desktop\AIST3110_Project\GAN\Weights\generator_final.pth",
+        )
+        torch.save(
+            D.state_dict(),
+            r"C:\Users\cxoox\Desktop\AIST3110_Project\GAN\Weights\discriminator_final.pth",
+        )
+
+
+if __name__ == "__main__":
+    # Paths
+    img_dir = r"C:\Users\cxoox\Desktop\AIST3110_Project\GAN\Data\Landscape"
+    label_csv = r"C:\Users\cxoox\Desktop\AIST3110_Project\GAN\Data\Landscape\valence_arousal.csv"
+
+    # Train the model
+    print("Starting training...")
+    train(img_dir, label_csv)
+    print("Training complete.")
