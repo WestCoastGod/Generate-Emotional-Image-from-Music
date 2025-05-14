@@ -12,7 +12,7 @@ import torch.nn.functional as F
 def train(
     img_dir,
     label_csv,
-    epochs=600,
+    epochs=1711,
     batch_size=16,
     lr=0.001,
     lambda_gp=10,
@@ -53,7 +53,7 @@ def train(
             z = torch.randn(real_imgs.size(0), 100).to(device)
 
             # Determine current stage for progressive growing
-            stage = min(epoch // 10, 5)
+            stage = min(epoch // 10, 5)  # Floor division to determine stage
 
             # Downsample real images to match the current stage resolution
             resolution = 4 * (2**stage)  # Calculate resolution based on stage
