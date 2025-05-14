@@ -1,0 +1,12 @@
+GAN/
+├── Models/              
+│   ├── eru.py           # ERU module
+│   ├── generator.py     # Generator
+│   ├── discriminator.py # Discriminator
+├── Utils/              
+│   ├── data_clean.py    # Data preprocessing
+│   ├── dataloader.py    # Data loading
+│   └── losses.py        # AFM-loss
+├── train.py             # Training script
+├── generate.py          # Image generation script
+└── gan_menu.txt         # GAN folder content 
